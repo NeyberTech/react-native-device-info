@@ -340,6 +340,10 @@ RCT_EXPORT_METHOD(syncUniqueId:(RCTPromiseResolveBlock)resolve rejecter:(RCTProm
     resolve([DeviceUID syncUid]);
 }
 
+RCT_EXPORT_METHOD(resetUniqueId:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    resolve([DeviceUID resetUid]);
+}
+
 - (NSString *) getDeviceId {
     struct utsname systemInfo;
     uname(&systemInfo);

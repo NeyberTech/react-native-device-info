@@ -28,6 +28,10 @@ NSString * const UIDKey = @"deviceUID";
     return [[[DeviceUID alloc] init] syncUid];
 }
 
++ (NSString *)resetUid {
+    return [[[DeviceUID alloc] init] resetUid];
+}
+
 #pragma mark - Instance methods
 
 - (id)init:(NSString *)key {
@@ -60,6 +64,12 @@ NSString * const UIDKey = @"deviceUID";
 - (NSString *)syncUid {
     _uid = [[self class] appleIFV];
     if (!_uid) _uid = [[self class] randomUUID];
+    [self save];
+    return _uid;
+}
+
+- (NSString *)resetUid {
+    _uid = [[self class] randomUUID];
     [self save];
     return _uid;
 }

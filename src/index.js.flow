@@ -143,6 +143,7 @@ declare module.exports: {
   supportedAbis: () => Promise<string[]>,
   supportedAbisSync: () => string[],
   syncUniqueId: () => Promise<string>,
+  resetUniqueId: () => Promise<string>,
   useBatteryLevel: () => number | null,
   useBatteryLevelIsLow: () => number | null,
   useDeviceName: () => AsyncHookResult<string>,
