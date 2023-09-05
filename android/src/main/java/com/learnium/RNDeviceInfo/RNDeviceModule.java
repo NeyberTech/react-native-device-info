@@ -20,6 +20,8 @@ import android.os.Environment;
 import android.os.PowerManager;
 import android.os.StatFs;
 import android.os.BatteryManager;
+import android.os.Debug;
+import android.os.Process;
 import android.provider.Settings;
 import android.webkit.WebSettings;
 import android.telephony.TelephonyManager;
@@ -44,6 +46,7 @@ import com.facebook.react.modules.core.DeviceEventManagerModule;
 import com.learnium.RNDeviceInfo.resolver.DeviceIdResolver;
 import com.learnium.RNDeviceInfo.resolver.DeviceTypeResolver;
 
+import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -68,6 +71,7 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
   private final DeviceTypeResolver deviceTypeResolver;
   private final DeviceIdResolver deviceIdResolver;
   private BroadcastReceiver receiver;
+  private BroadcastReceiver headphoneConnectionReceiver;
   private RNInstallReferrerClient installReferrerClient;
 
   private double mLastBatteryLevel = -1;
@@ -127,12 +131,30 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
     };
 
     getReactApplicationContext().registerReceiver(receiver, filter);
+    initializeHeadphoneConnectionReceiver();
+  }
+
+  private void initializeHeadphoneConnectionReceiver() {
+    IntentFilter filter = new IntentFilter();
+    filter.addAction(AudioManager.ACTION_HEADSET_PLUG);
+    filter.addAction(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED);
+
+    headphoneConnectionReceiver = new BroadcastReceiver() {
+      @Override
+      public void onReceive(Context context, Intent intent) {
+        boolean isConnected = isHeadphonesConnectedSync();
+        sendEvent(getReactApplicationContext(), "RNDeviceInfo_headphoneConnectionDidChange", isConnected);
+      }
+    };
+
+    getReactApplicationContext().registerReceiver(headphoneConnectionReceiver, filter);
   }
 
 
   @Override
   public void onCatalystInstanceDestroy() {
     getReactApplicationContext().unregisterReceiver(receiver);
+    getReactApplicationContext().unregisterReceiver(headphoneConnectionReceiver);
   }
 
 
@@ -140,6 +162,10 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
   @Nonnull
   public String getName() {
     return NAME;
+  }
+
+  public static SharedPreferences getRNDISharedPreferences(Context context) {
+    return context.getSharedPreferences("react-native-device-info", Context.MODE_PRIVATE);
   }
 
   @SuppressLint("MissingPermission")
@@ -167,7 +193,6 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
 
     final Map<String, Object> constants = new HashMap<>();
 
-    constants.put("uniqueId", getUniqueIdSync());
     constants.put("deviceId", Build.BOARD);
     constants.put("bundleId", getReactApplicationContext().getPackageName());
     constants.put("systemName", "Android");
@@ -181,6 +206,16 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
     constants.put("deviceType", deviceTypeResolver.getDeviceType().getValue());
 
     return constants;
+  }
+
+  @ReactMethod
+  public void addListener(String eventName) {
+    // Keep: Required for RN built in Event Emitter Calls.
+  }
+
+  @ReactMethod
+  public void removeListeners(Integer count) {
+    // Keep: Required for RN built in Event Emitter Calls.
   }
 
   @ReactMethod
@@ -332,8 +367,13 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
   @ReactMethod(isBlockingSynchronousMethod = true)
   public double getTotalDiskCapacitySync() {
     try {
-      StatFs root = new StatFs(Environment.getRootDirectory().getAbsolutePath());
-      return BigInteger.valueOf(root.getBlockCount()).multiply(BigInteger.valueOf(root.getBlockSize())).doubleValue();
+      StatFs rootDir = new StatFs(Environment.getRootDirectory().getAbsolutePath());
+      StatFs dataDir = new StatFs(Environment.getDataDirectory().getAbsolutePath());
+
+      BigInteger rootDirCapacity = getDirTotalCapacity(rootDir);
+      BigInteger dataDirCapacity = getDirTotalCapacity(dataDir);
+
+      return rootDirCapacity.add(dataDirCapacity).doubleValue();
     } catch (Exception e) {
       return -1;
     }
@@ -341,8 +381,59 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
   @ReactMethod
   public void getTotalDiskCapacity(Promise p) { p.resolve(getTotalDiskCapacitySync()); }
 
+  private BigInteger getDirTotalCapacity(StatFs dir) {
+    boolean intApiDeprecated = Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2;
+    long blockCount = intApiDeprecated ? dir.getBlockCountLong() : dir.getBlockCount();
+    long blockSize = intApiDeprecated ? dir.getBlockSizeLong() : dir.getBlockSize();
+    return BigInteger.valueOf(blockCount).multiply(BigInteger.valueOf(blockSize));
+  }
+
   @ReactMethod(isBlockingSynchronousMethod = true)
   public double getFreeDiskStorageSync() {
+    try {
+      StatFs rootDir = new StatFs(Environment.getRootDirectory().getAbsolutePath());
+      StatFs dataDir = new StatFs(Environment.getDataDirectory().getAbsolutePath());
+
+      Boolean intApiDeprecated = Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2;
+      long rootAvailableBlocks = getTotalAvailableBlocks(rootDir, intApiDeprecated);
+      long rootBlockSize = getBlockSize(rootDir, intApiDeprecated);
+      double rootFree = BigInteger.valueOf(rootAvailableBlocks).multiply(BigInteger.valueOf(rootBlockSize)).doubleValue();
+
+      long dataAvailableBlocks = getTotalAvailableBlocks(dataDir, intApiDeprecated);
+      long dataBlockSize = getBlockSize(dataDir, intApiDeprecated);
+      double dataFree = BigInteger.valueOf(dataAvailableBlocks).multiply(BigInteger.valueOf(dataBlockSize)).doubleValue();
+
+      return rootFree + dataFree;
+    } catch (Exception e) {
+      return -1;
+    }
+  }
+  @ReactMethod
+  public void getFreeDiskStorage(Promise p) { p.resolve(getFreeDiskStorageSync()); }
+
+  private long getTotalAvailableBlocks(StatFs dir, Boolean intApiDeprecated) {
+    return (intApiDeprecated ? dir.getAvailableBlocksLong() : dir.getAvailableBlocks());
+  }
+
+  private long getBlockSize(StatFs dir, Boolean intApiDeprecated) {
+    return (intApiDeprecated ? dir.getBlockSizeLong() : dir.getBlockSize());
+  }
+
+  @Deprecated
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  public double getTotalDiskCapacityOldSync() {
+    try {
+      StatFs root = new StatFs(Environment.getRootDirectory().getAbsolutePath());
+      return BigInteger.valueOf(root.getBlockCount()).multiply(BigInteger.valueOf(root.getBlockSize())).doubleValue();
+    } catch (Exception e) {
+      return -1;
+    }
+  }
+  @ReactMethod
+  public void getTotalDiskCapacityOld(Promise p) { p.resolve(getTotalDiskCapacityOldSync()); }
+
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  public double getFreeDiskStorageOldSync() {
     try {
       StatFs external = new StatFs(Environment.getExternalStorageDirectory().getAbsolutePath());
       long availableBlocks;
@@ -362,7 +453,7 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
     }
   }
   @ReactMethod
-  public void getFreeDiskStorage(Promise p) { p.resolve(getFreeDiskStorageSync()); }
+  public void getFreeDiskStorageOld(Promise p) { p.resolve(getFreeDiskStorageOldSync()); }
 
   @ReactMethod(isBlockingSynchronousMethod = true)
   public boolean isBatteryChargingSync(){
@@ -378,11 +469,26 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
   public void isBatteryCharging(Promise p) { p.resolve(isBatteryChargingSync()); }
 
   @ReactMethod(isBlockingSynchronousMethod = true)
-  public int getUsedMemorySync() {
-    Runtime rt = Runtime.getRuntime();
-    long usedMemory = rt.totalMemory() - rt.freeMemory();
-    return (int)usedMemory;
+  public double getUsedMemorySync() {
+    ActivityManager actMgr = (ActivityManager) getReactApplicationContext().getSystemService(Context.ACTIVITY_SERVICE);
+    if (actMgr != null) {
+      int pid = android.os.Process.myPid();
+      android.os.Debug.MemoryInfo[] memInfos = actMgr.getProcessMemoryInfo(new int[]{pid});
+
+      if(memInfos.length != 1) {
+        System.err.println("Unable to getProcessMemoryInfo. getProcessMemoryInfo did not return any info for the PID");
+        return -1;
+      }
+
+      android.os.Debug.MemoryInfo memInfo = memInfos[0];
+
+      return memInfo.getTotalPss() * 1024D;
+    } else {
+      System.err.println("Unable to getProcessMemoryInfo. ActivityManager was null");
+      return -1;
+    }
   }
+
   @ReactMethod
   public void getUsedMemory(Promise p) { p.resolve(getUsedMemorySync()); }
 
@@ -422,6 +528,38 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
   }
   @ReactMethod
   public void isAirplaneMode(Promise p) { p.resolve(isAirplaneModeSync()); }
+
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  public boolean hasGmsSync() {
+    try {
+      Class<?> googleApiAvailability = Class.forName("com.google.android.gms.common.GoogleApiAvailability");
+      Method getInstanceMethod = googleApiAvailability.getMethod("getInstance");
+      Object gmsObject = getInstanceMethod.invoke(null);
+      Method isGooglePlayServicesAvailableMethod = gmsObject.getClass().getMethod("isGooglePlayServicesAvailable", Context.class);
+      int isGMS = (int) isGooglePlayServicesAvailableMethod.invoke(gmsObject, getReactApplicationContext());
+      return isGMS == 0; // ConnectionResult.SUCCESS
+    } catch (Exception e) {
+      return false;
+    }
+  }
+  @ReactMethod
+  public void hasGms(Promise p) { p.resolve(hasGmsSync()); }
+
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  public boolean hasHmsSync() {
+    try {
+      Class<?> huaweiApiAvailability = Class.forName("com.huawei.hms.api.HuaweiApiAvailability");
+      Method getInstanceMethod = huaweiApiAvailability.getMethod("getInstance");
+      Object hmsObject = getInstanceMethod.invoke(null);
+      Method isHuaweiMobileServicesAvailableMethod = hmsObject.getClass().getMethod("isHuaweiMobileServicesAvailable", Context.class);
+      int isHMS = (int) isHuaweiMobileServicesAvailableMethod.invoke(hmsObject, getReactApplicationContext());
+      return isHMS == 0; // ConnectionResult.SUCCESS
+    } catch (Exception e) {
+      return false;
+    }
+  }
+  @ReactMethod
+  public void hasHms(Promise p) { p.resolve(hasHmsSync()); }
 
   @ReactMethod(isBlockingSynchronousMethod = true)
   public boolean hasSystemFeatureSync(String feature) {
@@ -503,7 +641,7 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
 
   @ReactMethod(isBlockingSynchronousMethod = true)
   public String getInstallReferrerSync() {
-    SharedPreferences sharedPref = getReactApplicationContext().getSharedPreferences("react-native-device-info", Context.MODE_PRIVATE);
+    SharedPreferences sharedPref = getRNDISharedPreferences(getReactApplicationContext());
     return sharedPref.getString("installReferrer", Build.UNKNOWN);
   }
   @ReactMethod
@@ -553,9 +691,11 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
   @ReactMethod(isBlockingSynchronousMethod = true)
   public String getDeviceNameSync() {
     try {
-      String bluetoothName = Settings.Secure.getString(getReactApplicationContext().getContentResolver(), "bluetooth_name");
-      if (bluetoothName != null) {
-        return bluetoothName;
+      if (Build.VERSION.SDK_INT <= 31) {
+        String bluetoothName = Settings.Secure.getString(getReactApplicationContext().getContentResolver(), "bluetooth_name");
+        if (bluetoothName != null) {
+          return bluetoothName;
+        }
       }
 
       if (Build.VERSION.SDK_INT >= 25) {
@@ -577,9 +717,13 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
   public String getSerialNumberSync() {
     try {
       if (Build.VERSION.SDK_INT >= 26) {
-        if (getReactApplicationContext().checkCallingOrSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
-          return Build.getSerial();
-        }
+        // There are a lot of conditions to access to getSerial api
+        // For details, see https://developer.android.com/reference/android/os/Build#getSerial()
+        // Rather than check each one, just try and rely on the catch below, for discussion on this approach, refer to
+        // https://github.com/react-native-device-info/react-native-device-info/issues/1320
+        return Build.getSerial();
+      } else {
+        return Build.SERIAL;
       }
     } catch (Exception e) {
       // This is almost always a PermissionException. We will log it but return unknown
@@ -664,6 +808,10 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
   @SuppressLint("HardwareIds")
   @ReactMethod(isBlockingSynchronousMethod = true)
   public String getUniqueIdSync() { return getString(getReactApplicationContext().getContentResolver(), Settings.Secure.ANDROID_ID); }
+  @ReactMethod
+  public void getUniqueId(Promise p) {
+    p.resolve(getUniqueIdSync());
+  }
 
   @SuppressLint("HardwareIds")
   @ReactMethod(isBlockingSynchronousMethod = true)
@@ -753,7 +901,11 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
                     (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && getReactApplicationContext().checkCallingOrSelfPermission(Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED))) {
       TelephonyManager telMgr = (TelephonyManager) getReactApplicationContext().getSystemService(Context.TELEPHONY_SERVICE);
       if (telMgr != null) {
-        return telMgr.getLine1Number();
+        try {
+          return telMgr.getLine1Number();
+        } catch (SecurityException e) {
+          System.err.println("getLine1Number called with permission, but threw anyway: " + e.getMessage());
+        }
       } else {
         System.err.println("Unable to getPhoneNumber. TelephonyManager was null");
       }

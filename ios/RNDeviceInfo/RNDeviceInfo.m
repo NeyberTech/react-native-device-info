@@ -15,6 +15,7 @@
 #import "RNDeviceInfo.h"
 #import "DeviceUID.h"
 #import <DeviceCheck/DeviceCheck.h>
+#import "EnvironmentUtil.h"
 
 #if !(TARGET_OS_TV)
 #import <WebKit/WebKit.h>
@@ -25,10 +26,11 @@ typedef NS_ENUM(NSInteger, DeviceType) {
     DeviceTypeHandset,
     DeviceTypeTablet,
     DeviceTypeTv,
+    DeviceTypeDesktop,
     DeviceTypeUnknown
 };
 
-#define DeviceTypeValues [NSArray arrayWithObjects: @"Handset", @"Tablet", @"Tv", @"unknown", nil]
+#define DeviceTypeValues [NSArray arrayWithObjects: @"Handset", @"Tablet", @"Tv", @"Desktop", @"unknown", nil]
 
 #if !(TARGET_OS_TV)
 @import CoreTelephony;
@@ -49,12 +51,11 @@ RCT_EXPORT_MODULE();
 
 - (NSArray<NSString *> *)supportedEvents
 {
-    return @[@"RNDeviceInfo_batteryLevelDidChange", @"RNDeviceInfo_batteryLevelIsLow", @"RNDeviceInfo_powerStateDidChange"];
+    return @[@"RNDeviceInfo_batteryLevelDidChange", @"RNDeviceInfo_batteryLevelIsLow", @"RNDeviceInfo_powerStateDidChange", @"RNDeviceInfo_headphoneConnectionDidChange", @"RNDeviceInfo_brightnessDidChange"];
 }
 
 - (NSDictionary *)constantsToExport {
     return @{
-         @"uniqueId": [self getUniqueId],
          @"deviceId": [self getDeviceId],
          @"bundleId": [self getBundleId],
          @"systemName": [self getSystemName],
@@ -88,6 +89,14 @@ RCT_EXPORT_MODULE();
                                                  selector:@selector(powerStateDidChange:)
                                                      name:NSProcessInfoPowerStateDidChangeNotification
                                                    object: nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(headphoneConnectionDidChange:)
+                                                     name:AVAudioSessionRouteChangeNotification
+                                                   object: [AVAudioSession sharedInstance]];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(brightnessDidChange:)
+                                                     name:UIScreenBrightnessDidChangeNotification
+                                                   object: nil];
 #endif
     }
 
@@ -106,8 +115,18 @@ RCT_EXPORT_MODULE();
 {
     switch ([[UIDevice currentDevice] userInterfaceIdiom]) {
         case UIUserInterfaceIdiomPhone: return DeviceTypeHandset;
-        case UIUserInterfaceIdiomPad: return DeviceTypeTablet;
+        case UIUserInterfaceIdiomPad:
+            if (TARGET_OS_MACCATALYST) {
+                return DeviceTypeDesktop;
+            }
+            if (@available(iOS 14.0, *)) {
+                if ([NSProcessInfo processInfo].isiOSAppOnMac) {
+                    return DeviceTypeDesktop;
+                }
+            }
+            return DeviceTypeTablet;
         case UIUserInterfaceIdiomTV: return DeviceTypeTv;
+        case UIUserInterfaceIdiomMac: return DeviceTypeDesktop;
         default: return DeviceTypeUnknown;
     }
 }
@@ -216,6 +235,20 @@ RCT_EXPORT_METHOD(getDeviceName:(RCTPromiseResolveBlock)resolve rejecter:(RCTPro
         @"iPhone12,1": @"iPhone 11",
         @"iPhone12,3": @"iPhone 11 Pro",
         @"iPhone12,5": @"iPhone 11 Pro Max",
+        @"iPhone12,8": @"iPhone SE", // (2nd Generation iPhone SE),
+        @"iPhone13,1": @"iPhone 12 mini",
+        @"iPhone13,2": @"iPhone 12",
+        @"iPhone13,3": @"iPhone 12 Pro",
+        @"iPhone13,4": @"iPhone 12 Pro Max",
+        @"iPhone14,4": @"iPhone 13 mini",
+        @"iPhone14,5": @"iPhone 13",
+        @"iPhone14,2": @"iPhone 13 Pro",
+        @"iPhone14,3": @"iPhone 13 Pro Max",
+        @"iPhone14,6": @"iPhone SE", // (3nd Generation iPhone SE),
+        @"iPhone14,7": @"iPhone 14",
+        @"iPhone14,8": @"iPhone 14 Plus",
+        @"iPhone15,2": @"iPhone 14 Pro",
+        @"iPhone15,3": @"iPhone 14 Pro Max",
         @"iPad4,1": @"iPad Air", // 5th Generation iPad (iPad Air) - Wifi
         @"iPad4,2": @"iPad Air", // 5th Generation iPad (iPad Air) - Cellular
         @"iPad4,3": @"iPad Air", // 5th Generation iPad (iPad Air)
@@ -255,6 +288,8 @@ RCT_EXPORT_METHOD(getDeviceName:(RCTPromiseResolveBlock)resolve rejecter:(RCTPro
         @"iPad11,2": @"iPad Mini 5", // (5th Generation iPad Mini)
         @"iPad11,3": @"iPad Air (3rd generation)",
         @"iPad11,4": @"iPad Air (3rd generation)",
+        @"iPad13,1": @"iPad Air (4th generation)",
+        @"iPad13,2": @"iPad Air (4th generation)",
         @"AppleTV2,1": @"Apple TV", // Apple TV (2nd Generation)
         @"AppleTV3,1": @"Apple TV", // Apple TV (3rd Generation)
         @"AppleTV3,2": @"Apple TV", // Apple TV (3rd Generation - Rev A)
@@ -332,8 +367,16 @@ RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(getBuildIdSync) {
     return self.getBuildId;
 }
 
-- (NSString *) getUniqueId {
+- (NSString *) uniqueId {
     return [DeviceUID uid];
+}
+
+RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(getUniqueIdSync) {
+    return self.uniqueId;
+}
+
+RCT_EXPORT_METHOD(getUniqueId:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    resolve(self.uniqueId);
 }
 
 RCT_EXPORT_METHOD(syncUniqueId:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
@@ -349,24 +392,19 @@ RCT_EXPORT_METHOD(resetUniqueId:(RCTPromiseResolveBlock)resolve rejecter:(RCTPro
     uname(&systemInfo);
     NSString* deviceId = [NSString stringWithCString:systemInfo.machine
                                             encoding:NSUTF8StringEncoding];
-    if ([deviceId isEqualToString:@"i386"] || [deviceId isEqualToString:@"x86_64"] ) {
+    #if TARGET_IPHONE_SIMULATOR
         deviceId = [NSString stringWithFormat:@"%s", getenv("SIMULATOR_MODEL_IDENTIFIER")];
-    }
+    #endif
     return deviceId;
 }
 
 
 - (BOOL) isEmulator {
-    struct utsname systemInfo;
-    uname(&systemInfo);
-    NSString* deviceId = [NSString stringWithCString:systemInfo.machine
-                                            encoding:NSUTF8StringEncoding];
-
-    if ([deviceId isEqualToString:@"i386"] || [deviceId isEqualToString:@"x86_64"] ) {
+    #if TARGET_IPHONE_SIMULATOR
         return YES;
-    } else {
+    #else
         return NO;
-    }
+    #endif
 }
 
 RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(isEmulatorSync) {
@@ -416,13 +454,17 @@ RCT_EXPORT_METHOD(getDeviceToken:(RCTPromiseResolveBlock)resolve rejecter:(RCTPr
 - (float) getFontScale {
     // Font scales based on font sizes from https://developer.apple.com/ios/human-interface-guidelines/visual-design/typography/
     float fontScale = 1.0;
-    UIApplication *application = RCTSharedApplication();
+    UITraitCollection *traitCollection = [[UIScreen mainScreen] traitCollection];
 
     // Shared application is unavailable in an app extension.
-    if (application) {
+    if (traitCollection) {
         __block NSString *contentSize = nil;
         RCTUnsafeExecuteOnMainQueueSync(^{
-            contentSize = application.preferredContentSizeCategory;
+            if (@available(iOS 10.0, tvOS 10.0, macCatalyst 13.0, *)) {
+                contentSize = traitCollection.preferredContentSizeCategory;
+            } else {
+                // if we can't get contentSize, we'll fall back to 1.0
+            }
         });
 
         if ([contentSize isEqual: @"UICTContentSizeCategoryXS"]) fontScale = 0.82;
@@ -530,7 +572,9 @@ RCT_EXPORT_METHOD(getSupportedAbis:(RCTPromiseResolveBlock)resolve rejecter:(RCT
         // Loop through linked list of interfaces
         temp_addr = interfaces;
         while(temp_addr != NULL) {
-            if(temp_addr->ifa_addr->sa_family == AF_INET) {
+            sa_family_t addr_family = temp_addr->ifa_addr->sa_family;
+            // Check for IPv4 or IPv6-only interfaces
+            if(addr_family == AF_INET || addr_family == AF_INET6) {
                 NSString* ifname = [NSString stringWithUTF8String:temp_addr->ifa_name];
                     if(
                         // Check if interface is en0 which is the wifi connection the iPhone
@@ -539,8 +583,15 @@ RCT_EXPORT_METHOD(getSupportedAbis:(RCTPromiseResolveBlock)resolve rejecter:(RCT
                         // Check if interface is en1 which is the wifi connection on the Apple TV
                         [ifname isEqualToString:@"en1"]
                     ) {
-                        // Get NSString from C String
-                        address = [NSString stringWithUTF8String:inet_ntoa(((struct sockaddr_in *)temp_addr->ifa_addr)->sin_addr)];
+                        const struct sockaddr_in *addr = (const struct sockaddr_in*)temp_addr->ifa_addr;
+                        socklen_t addr_len = addr_family == AF_INET ? INET_ADDRSTRLEN : INET6_ADDRSTRLEN;
+                        char addr_buffer[addr_len];
+                        // We use inet_ntop because it also supports getting an address from
+                        // interfaces that are IPv6-only
+                        const char *netname = inet_ntop(addr_family, &addr->sin_addr, addr_buffer, addr_len);
+
+                         // Get NSString from C String
+                        address = [NSString stringWithUTF8String:netname];
                     }
             }
             temp_addr = temp_addr->ifa_next;
@@ -581,7 +632,7 @@ RCT_EXPORT_METHOD(isPinOrFingerprintSet:(RCTPromiseResolveBlock)resolve rejecter
         return;
     }
 
-    float batteryLevel = [self.powerState[@"batteryLevel"] floatValue];
+    float batteryLevel = self.getBatteryLevel;
     [self sendEventWithName:@"RNDeviceInfo_batteryLevelDidChange" body:@(batteryLevel)];
 
     if (batteryLevel <= _lowBatteryThreshold) {
@@ -596,6 +647,21 @@ RCT_EXPORT_METHOD(isPinOrFingerprintSet:(RCTPromiseResolveBlock)resolve rejecter
     [self sendEventWithName:@"RNDeviceInfo_powerStateDidChange" body:self.powerState];
 }
 
+- (void) headphoneConnectionDidChange:(NSNotification *)notification {
+    if (!hasListeners) {
+        return;
+    }
+    BOOL isConnected = [self isHeadphonesConnected];
+    [self sendEventWithName:@"RNDeviceInfo_headphoneConnectionDidChange" body:[NSNumber numberWithBool:isConnected]];
+}
+
+- (void) brightnessDidChange:(NSNotification *)notification {
+    if (!hasListeners) {
+        return;
+    }
+    [self sendEventWithName:@"RNDeviceInfo_brightnessDidChange" body:self.getBrightness];
+}
+
 - (NSDictionary *) powerState {
 #if RCT_DEV && (!TARGET_IPHONE_SIMULATOR) && !TARGET_OS_TV
     if ([UIDevice currentDevice].isBatteryMonitoringEnabled != true) {
@@ -608,13 +674,14 @@ RCT_EXPORT_METHOD(isPinOrFingerprintSet:(RCTPromiseResolveBlock)resolve rejecter
         RCTLogWarn(@"Battery state `unknown` and monitoring disabled, this is normal for simulators and tvOS.");
     }
 #endif
+    float batteryLevel = self.getBatteryLevel;
 
     return @{
 #if TARGET_OS_TV
-             @"batteryLevel": @1,
+             @"batteryLevel": @(batteryLevel),
              @"batteryState": @"full",
 #else
-             @"batteryLevel": @([UIDevice currentDevice].batteryLevel),
+             @"batteryLevel": @(batteryLevel),
              @"batteryState": [@[@"unknown", @"unplugged", @"charging", @"full"] objectAtIndex: [UIDevice currentDevice].batteryState],
              @"lowPowerMode": @([NSProcessInfo processInfo].isLowPowerModeEnabled),
 #endif
@@ -630,7 +697,11 @@ RCT_EXPORT_METHOD(getPowerState:(RCTPromiseResolveBlock)resolve rejecter:(RCTPro
 }
 
 - (float) getBatteryLevel {
-    return [self.powerState[@"batteryLevel"] floatValue];
+#if TARGET_OS_TV
+    return [@1 floatValue];
+#else
+    return [@([UIDevice currentDevice].batteryLevel) floatValue];
+#endif
 }
 
 RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(getBatteryLevelSync) {
@@ -764,6 +835,48 @@ RCT_EXPORT_METHOD(getAvailableLocationProviders:(RCTPromiseResolveBlock)resolve 
     resolve(self.getAvailableLocationProviders);
 }
 
+#pragma mark - Installer Package Name -
+
+RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(getInstallerPackageNameSync) {
+    return [EnvironmentValues objectAtIndex:[EnvironmentUtil currentAppEnvironment]];
+}
+
+RCT_EXPORT_METHOD(getInstallerPackageName:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    resolve([EnvironmentValues objectAtIndex:[EnvironmentUtil currentAppEnvironment]]);
+}
+
+- (NSNumber *) getBrightness {
+#if !TARGET_OS_TV
+    return @([UIScreen mainScreen].brightness);
+#else
+    return @(-1);
+#endif
+}
+
+RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(getBrightnessSync) {
+    return self.getBrightness;
+}
+
+RCT_EXPORT_METHOD(getBrightness:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    resolve(self.getBrightness);
+}
+
+RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(getFirstInstallTimeSync) {
+    return @(self.getFirstInstallTime);
+}
+
+RCT_EXPORT_METHOD(getFirstInstallTime:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    resolve(@(self.getFirstInstallTime));
+}
+
+- (long long) getFirstInstallTime {
+    NSURL* urlToDocumentsFolder = [[[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] lastObject];
+    NSError *error;
+    NSDate *installDate = [[[NSFileManager defaultManager] attributesOfItemAtPath:urlToDocumentsFolder.path error:&error] objectForKey:NSFileCreationDate];
+    return [@(floor([installDate timeIntervalSince1970] * 1000)) longLongValue];
+}
+
+#pragma mark - dealloc -
 
 - (void)dealloc
 {

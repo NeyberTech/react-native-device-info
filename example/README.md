@@ -2,9 +2,9 @@
 
 ## Installation
 
-* `git clone https://github.com/react-native-community/react-native-device-info.git`
+* `git clone https://github.com/react-native-device-info/react-native-device-info.git`
 * `cd react-native-device-info/example`
-* `npm install`
+* `yarn`
 
 
 ## Running Android
@@ -27,6 +27,11 @@
 
 * `cd ios && pod install && cd ..`
 * `react-native run-ios`
+
+## Running Windows
+
+* make sure you have no other packagers running!
+* `react-native run-windows`
 
 ## Troubleshooting
 

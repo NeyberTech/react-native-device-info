@@ -1,4 +1,5 @@
-import { DeviceType, LocationProviderInfo, PowerState, AsyncHookResult } from './types';
+import { Platform } from 'react-native';
+import type { DeviceType, LocationProviderInfo, PowerState, AsyncHookResult } from './types';
 
 export type NotchDevice = {
   brand: string;
@@ -19,7 +20,6 @@ interface NativeConstants {
   model: string;
   systemName: string;
   systemVersion: string;
-  uniqueId: string;
 }
 
 interface HiddenNativeMethods {
@@ -68,7 +68,9 @@ interface ExposedNativeMethods {
   getFontScale: () => Promise<number>;
   getFontScaleSync: () => number;
   getFreeDiskStorage: () => Promise<number>;
+  getFreeDiskStorageOld: () => Promise<number>;
   getFreeDiskStorageSync: () => number;
+  getFreeDiskStorageOldSync: () => number;
   getHardware: () => Promise<string>;
   getHardwareSync: () => string;
   getHost: () => Promise<string>;
@@ -104,15 +106,25 @@ interface ExposedNativeMethods {
   getTags: () => Promise<string>;
   getTagsSync: () => string;
   getTotalDiskCapacity: () => Promise<number>;
+  getTotalDiskCapacityOld: () => Promise<number>;
   getTotalDiskCapacitySync: () => number;
+  getTotalDiskCapacityOldSync: () => number;
   getTotalMemory: () => Promise<number>;
   getTotalMemorySync: () => number;
   getType: () => Promise<string>;
   getTypeSync: () => string;
+  getUniqueId: () => Promise<string>;
+  getUniqueIdSync: () => string;
   getUsedMemory: () => Promise<number>;
   getUsedMemorySync: () => number;
   getUserAgent: () => Promise<string>;
   getUserAgentSync: () => string;
+  getBrightness: () => Promise<number>;
+  getBrightnessSync: () => number;
+  hasGms: () => Promise<boolean>;
+  hasGmsSync: () => boolean;
+  hasHms: () => Promise<boolean>;
+  hasHmsSync: () => boolean;
   hasSystemFeature: (feature: string) => Promise<boolean>;
   hasSystemFeatureSync: (feature: string) => boolean;
   isAirplaneMode: () => Promise<boolean>;
@@ -129,6 +141,11 @@ interface ExposedNativeMethods {
   isLocationEnabledSync: () => boolean;
   isPinOrFingerprintSet: () => Promise<boolean>;
   isPinOrFingerprintSetSync: () => boolean;
+  isMouseConnected: () => Promise<boolean>;
+  isMouseConnectedSync: () => boolean;
+  isKeyboardConnected: () => Promise<boolean>;
+  isKeyboardConnectedSync: () => boolean;
+  isTabletMode: () => Promise<boolean>;
   syncUniqueId: () => Promise<string>;
   resetUniqueId: () => Promise<string>;
 }
@@ -148,14 +165,16 @@ export interface DeviceInfoModule extends ExposedNativeMethods {
   getManufacturer: () => Promise<string>;
   getManufacturerSync: () => string;
   getModel: () => string;
-  getPowerState: () => Promise<PowerState | {}>;
-  getPowerStateSync: () => PowerState | {};
+  getPowerState: () => Promise<Partial<PowerState>>;
+  getPowerStateSync: () => Partial<PowerState>;
   getReadableVersion: () => string;
   getSystemName: () => string;
   getSystemVersion: () => string;
-  getUniqueId: () => string;
+  getUniqueId: () => Promise<string>;
+  getUniqueIdSync: () => string;
   getVersion: () => string;
   hasNotch: () => boolean;
+  hasDynamicIsland: () => boolean;
   hasSystemFeature: (feature: string) => Promise<boolean>;
   hasSystemFeatureSync: (feature: string) => boolean;
   isLandscape: () => Promise<boolean>;
@@ -173,5 +192,33 @@ export interface DeviceInfoModule extends ExposedNativeMethods {
   useFirstInstallTime: () => AsyncHookResult<number>;
   useHasSystemFeature: (feature: string) => AsyncHookResult<boolean>;
   useIsEmulator: () => AsyncHookResult<boolean>;
-  usePowerState: () => PowerState | {};
+  usePowerState: () => Partial<PowerState>;
+  useManufacturer: () => AsyncHookResult<string>;
+  useIsHeadphonesConnected: () => AsyncHookResult<boolean>;
+  useBrightness: () => number | null;
+}
+
+export type Getter<T> = () => T;
+export type PlatformArray = typeof Platform.OS[];
+
+export interface GetSupportedPlatformInfoSyncParams<T> {
+  getter: Getter<T>;
+  supportedPlatforms: PlatformArray;
+  defaultValue: T;
+  memoKey?: string;
+}
+
+export interface GetSupportedPlatformInfoAsyncParams<T>
+  extends Omit<GetSupportedPlatformInfoSyncParams<T>, 'getter'> {
+  getter: Getter<Promise<T>>;
+}
+
+export interface GetFilterPlatformFunctionsParams<T>
+  extends GetSupportedPlatformInfoAsyncParams<T> {
+  syncGetter: Getter<T>;
+}
+
+export interface GetSupportedPlatformInfoFunctionsParams<T>
+  extends GetSupportedPlatformInfoAsyncParams<T> {
+  syncGetter: Getter<T>;
 }

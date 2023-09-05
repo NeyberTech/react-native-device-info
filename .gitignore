@@ -66,5 +66,14 @@ examplern59
 lib/
 
 # Visual Studio build artifacts
+windows/RNDeviceInfo/bin
+windows/RNDeviceInfo/obj
+windows/.vs
+windows/packages
 windows/RNDeviceInfo/.vs/*
-windows/RNDeviceInfo/obj/*
+
+# MSBuild Binary and Structured Log
+example/*.binlog
+
+# Debug log
+example/debug.log
